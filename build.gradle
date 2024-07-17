@@ -1,0 +1,260 @@
+/*
+ * Copyright (c) 2014, Francis Galiegue (fgaliegue@gmail.com)
+ *
+ * This software is dual-licensed under:
+ *
+ * - the Lesser General Public License (LGPL) version 3.0 or, at your option, any
+ *   later version;
+ * - the Apache Software License (ASL) version 2.0.
+ *
+ * The text of this file and of both licenses is available at the root of this
+ * project or, if you have the jar distribution, in directory META-INF/, under
+ * the names LGPL-3.0.txt and ASL-2.0.txt respectively.
+ *
+ * Direct link to the sources:
+ *
+ * - LGPL 3.0: https://www.gnu.org/licenses/lgpl-3.0.txt
+ * - ASL 2.0: http://www.apache.org/licenses/LICENSE-2.0.txt
+ */
+
+plugins {
+    id 'java'
+    id 'maven-publish'
+    id 'signing'
+    id 'idea'
+    id 'eclipse'
+    id 'biz.aQute.bnd.builder' version '6.4.0'
+    id 'net.ltgt.errorprone' version '3.0.1'
+}
+
+group = 'com.github.java-json-tools'
+version = '1.13'
+description = 'JSON Patch (RFC 6902) and JSON Merge Patch (RFC 7386) implementation in Java'
+
+sourceCompatibility = JavaVersion.VERSION_1_8
+targetCompatibility = JavaVersion.VERSION_1_8 // defaults to sourceCompatibility
+
+dependencies {
+    compileOnly(group: 'com.google.code.findbugs', name: 'jsr305', version: '3.0.2')
+    implementation(group: 'com.fasterxml.jackson.core', name: 'jackson-databind', version: '2.11.0')
+    implementation(group: 'com.github.java-json-tools', name: 'msg-simple', version: '1.2')
+
+    implementation(group: 'com.github.java-json-tools', name: 'jackson-coreutils', version: '2.0')
+
+    testImplementation(group: 'org.testng', name: 'testng', version: '7.1.0') {
+        exclude(group: 'junit', module: 'junit')
+        exclude(group: 'org.beanshell', module: 'bsh')
+        exclude(group: 'org.yaml', module: 'snakeyaml')
+    }
+    testImplementation(group: 'org.mockito', name: 'mockito-core', version: '2.28.2')
+    // FIXME: update to 3.x once we're off of Java 7
+    testImplementation(group: 'org.assertj', name: 'assertj-core', version: '2.9.1')
+    testImplementation(group: 'com.google.guava', name: 'guava', version: '28.2-android')
+}
+
+def forRelease = !version.endsWith('-SNAPSHOT')
+
+/*
+ * Repositories to use
+ */
+repositories {
+    mavenCentral()
+    if (!forRelease) {
+        maven {
+            url 'https://oss.sonatype.org/content/repositories/snapshots'
+        }
+    }
+    // Allow staging references for last pre-release testing.
+    if (project.properties.containsKey('sonatypeUsername')) {
+        maven {
+            url 'https://oss.sonatype.org/service/local/staging/deploy/maven2'
+            credentials {
+                username = project.properties['sonatypeUsername']
+                password = project.properties['sonatypePassword']
+            }
+        }
+    }
+}
+
+/*
+ * Add errorprone checking.
+ */
+dependencies {
+    errorprone('com.google.errorprone:error_prone_core:2.18.0')
+    errorproneJavac('com.google.errorprone:javac:9+181-r4173-1')
+}
+
+/*
+ * Necessary! Otherwise TestNG will not be used...
+ *
+ */
+tasks.withType(Test).configureEach {
+    useTestNG() {
+        useDefaultListeners = true
+    }
+}
+
+/*
+ * Necessary to generate the source and javadoc jars
+ */
+java {
+    withSourcesJar()
+    withJavadocJar()
+}
+
+(javadoc.options as StandardJavadocDocletOptions).with {
+    def currentJavaVersion = JavaVersion.current()
+    // FIXME: https://github.com/gradle/gradle/issues/11182
+    if (currentJavaVersion.compareTo(JavaVersion.VERSION_1_9) >= 0) {
+        // consider 10 as jdk 7/8/9 javadoc is un-linkable: no /elements-list (302 -> jdk19)
+        addStringOption('-release', '7')
+    }
+    // link to 7 javadoc but use 10's elements-list because it works
+    linksOffline('https://docs.oracle.com/javase/7/docs/api/',
+            'https://docs.oracle.com/javase/10/docs/api/element-list')
+    links('https://www.javadoc.io/doc/com.google.code.findbugs/jsr305/3.0.2/')
+    links('https://fasterxml.github.io/jackson-databind/javadoc/2.11/')
+    links('https://fasterxml.github.io/jackson-core/javadoc/2.11/')
+    links('https://fasterxml.github.io/jackson-annotations/javadoc/2.11/')
+    links('https://www.javadoc.io/doc/com.google.guava/guava/28.2-android/')
+    links('https://java-json-tools.github.io/msg-simple/')
+    links('https://java-json-tools.github.io/jackson-coreutils/')
+}
+
+/*
+ * Lint all the things!
+ */
+
+tasks.withType(JavaCompile).configureEach {
+    options.compilerArgs << '-Xlint:all' << '-Xlint:-serial' << '-Werror'
+}
+(javadoc.options as StandardJavadocDocletOptions).with { options ->
+    options.addBooleanOption('Xwerror', true)
+    options.addBooleanOption('quiet', true)
+    // there are some missing comments, replace -missing with none to ignore all
+    options.addBooleanOption('Xdoclint:-missing', true)
+}
+
+/*
+ * Javadoc: we need to tell where the overview.html is, it will not pick it up
+ * automatically...
+ */
+
+//javadoc {
+//    options.overview = 'src/main/java/overview.html'
+//}
+
+/*
+ * SIGNING
+ */
+
+def scmUrl = sprintf('git@github.com:java-json-tools/%s.git', name)
+def projectURL = sprintf('https://github.com/java-json-tools/%s', project.name)
+def sonatypeStaging = 'https://oss.sonatype.org/service/local/staging/deploy/maven2/'
+def sonatypeSnapshots = 'https://oss.sonatype.org/content/repositories/snapshots/'
+
+tasks.register('checkSigningRequirements') {
+    doLast {
+        def requiredProperties = [ 'sonatypeUsername', 'sonatypePassword' ]
+        def noDice = false
+        requiredProperties.each {
+            if (project.properties[it] == null) {
+                noDice = true
+                System.err.printf('property \'%s\' is not defined!\n', it)
+            }
+        }
+        if (noDice)
+            throw new IllegalStateException('missing required properties for ' +
+                'upload')
+    }
+}
+
+def publication = publishing.publications.create('maven', MavenPublication)
+publication.from(components.java)
+
+tasks.withType(PublishToMavenRepository).configureEach { dependsOn('checkSigningRequirements') }
+
+// follow Gradle conventions to supply gpg keys:
+// https://docs.gradle.org/current/userguide/signing_plugin.html#sec:signatory_credentials
+if (project.properties.containsKey('sonatypeUsername')) {
+    signing {
+        sign(publication)
+    }
+}
+
+publishing {
+    repositories {
+        maven {
+            name = 'repository'
+            url = sonatypeStaging
+            credentials {
+                username = project.properties['sonatypeUsername']
+                password = project.properties['sonatypePassword']
+            }
+        }
+
+        maven {
+            name = 'snapshotRepository'
+            url = sonatypeSnapshots
+            credentials {
+                username = project.properties['sonatypeUsername']
+                password = project.properties['sonatypePassword']
+            }
+        }
+    }
+}
+
+// https://stackoverflow.com/a/74205283
+tasks.register('copyPomToRoot') {
+    TaskProvider<GenerateMavenPom> generatePom =
+            tasks.named("generatePomFileFor${publication.name.capitalize()}Publication")
+                    as TaskProvider<GenerateMavenPom>
+    dependsOn(generatePom)
+    def output = rootProject.file("${publication.artifactId}-${publication.version}.pom")
+    outputs.file(output)
+    doLast { output.bytes = generatePom.get().destination.bytes }
+}
+
+/*
+ * Configure pom.xml on install, uploadArchives
+ */
+publication.with {
+    pom.with {
+        name = project.name
+        packaging = 'jar'
+        description = project.description
+        url = projectURL
+
+        scm {
+            url = scmUrl
+            connection = scmUrl
+            developerConnection = 'scm:git:' + scmUrl
+        }
+
+        licenses {
+            license {
+                name = 'Lesser General Public License, version 3 or greater'
+                url = 'http://www.gnu.org/licenses/lgpl.html'
+                distribution = 'repo'
+            }
+            license {
+                name = 'Apache Software License, version 2.0'
+                url = 'http://www.apache.org/licenses/LICENSE-2.0'
+                distribution = 'repo'
+            }
+        }
+
+        developers {
+            developer {
+                id = 'huggsboson'
+                name = 'John Huffaker'
+                email = 'jhuffaker+java-json-tools@gmail.com'
+            }
+        }
+    }
+}
+
+signing {
+    required { forRelease && gradle.taskGraph.hasTask('uploadArchives') }
+    sign configurations.archives;
+}
