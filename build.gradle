@@ -24,7 +24,7 @@ plugins {
     id 'idea'
     id 'eclipse'
     id 'biz.aQute.bnd.builder' version '6.4.0'
-    id 'net.ltgt.errorprone' version '3.0.1'
+    id 'net.ltgt.errorprone' version '4.0.1'
 }
 
 group = 'com.github.java-json-tools'
